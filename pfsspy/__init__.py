@@ -230,6 +230,45 @@ class Output:
             self.grid.pg, self.grid.sg, self.source_surface_br, ax)
         return mesh
 
+    @property
+    def pil(self):
+        """
+        Polarity inversion line(s).
+
+        Returns
+        -------
+        lines : list of (2,n) shaped arrays
+            Polarity inversion lines. Each item in the list is a (2,n) shaped
+            array that gives the (x, y) coordinates of each inversion line.
+        """
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        c = ax.contour(
+            self.grid.pg, self.grid.sg, self.source_surface_br, [0])
+        return c.allsegs[0]
+
+    def trace_streamers(self, nlines=None):
+        """
+        Trace the streamer field lines.
+
+        Parameters
+        ----------
+        nlines :
+
+        Returns
+        -------
+        flines : list of :class:`FieldLine`s
+        """
+        pils = self.pil
+        rho = np.log(self.grid.rss) - 0.01
+        flines = []
+        for pil in pils:
+            # TODO: replace this for loop when tracing accepts arrays
+            for (phi, s) in pil:
+                x0 = pfsspy.coords.strum2cart(rho, s, phi)
+                flines.append(self.trace(np.array(x0)))
+        return flines
+
     def plot_pil(self, ax=None):
         """
         Plot the polarity inversion line on the source surface.

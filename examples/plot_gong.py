@@ -65,6 +65,11 @@ fig.colorbar(mesh)
 output.plot_pil(ax)
 ax.set_title('Source surface magnetic field')
 
+streamer_lines = output.trace_streamers()
+for fline in streamer_lines:
+    fline.representation = 'spherical'
+    ax.plot(fline.lon, np.sin(fline.lat), lw=1, color='k', alpha=0.8)
+
 
 ###############################################################################
 # Trace some field lines
