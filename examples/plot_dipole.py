@@ -70,9 +70,11 @@ ax.set_aspect('equal')
 
 # Take 32 start points spaced equally in theta
 r = 1.01
-for theta in np.linspace(0, np.pi, 33):
-    x0 = np.array([0, r * np.sin(theta), r * np.cos(theta)])
-    field_line = output.trace(x0)
+thetas = np.linspace(0, np.pi, 33)
+seeds = np.array([0 * thetas, r * np.sin(thetas), r * np.cos(thetas)]).T
+field_lines = output.trace(seeds)
+
+for field_line in field_lines:
     color = {0: 'black', -1: 'tab:blue', 1: 'tab:red'}.get(field_line.polarity)
     ax.plot(field_line.y / const.R_sun,
             field_line.z / const.R_sun, color=color)

@@ -311,8 +311,8 @@ class Output:
 
         Parameters
         ----------
-        x0 : array
-            Starting coordinate, in cartesian coordinates.
+        x0 : (n,3) shaped array
+            Starting coordinates, in cartesian coordinates.
         dtf : float, optional
             Absolute tolerance of the tracing.
         rtol : float, optional
@@ -322,43 +322,24 @@ class Output:
         -------
         fl : :class:`FieldLine`
         """
-        import scipy.integrate
+        if x0.shape[1] != 3:
+            raise ValueError(f'x0 must be a (n, 3) shape array (got {x0.shape})')
 
-        def integrate_one_way(dt, start_point):
-            direction = np.sign(dt)
-            dt = np.abs(dt)
-            t = 0.0
-            xout = np.atleast_2d(start_point.copy())
+        import multiprocessing
+        import pfsspy.trace
+        from functools import partial
 
-            def finish_integration(t, coord):
-                r = np.linalg.norm(coord)
-                ret = (r - 1) * (r - self.grid.rss)
-                return ret
+        nproc = multiprocessing.cpu_count()
+        x0 = np.atleast_2d(x0)
+        seeds = np.array_split(x0, nproc)
 
-            finish_integration.terminal = True
-            # The integration domain is deliberately huge, because the
-            # the interation automatically stops when an out of bounds error
-            # is thrown
-            t_span = (0, 1e4)
+        kwargs = {'rss': self.grid.rss, 'bTrace': self._bTrace, 'rtol': rtol, 'atol': atol}
+        with multiprocessing.Pool(nproc) as p:
+            out = p.map(partial(pfsspy.trace._integrate_seeds, **kwargs), seeds)
 
-            def fun(t, y):
-                return self._bTrace(t, y, direction)
-
-            res = scipy.integrate.solve_ivp(
-                fun, t_span, start_point, method='LSODA',
-                rtol=rtol, atol=atol, events=finish_integration)
-
-            xout = res.y
-            return xout
-
-        def integrate_both_ways(start_point):
-            xforw = integrate_one_way(1, x0)
-            xback = integrate_one_way(-1, x0)
-            xback = np.flip(xback, axis=1)
-            xout = np.row_stack((xback.T, xforw.T))
-            return FieldLine(xout[:, 0], xout[:, 1], xout[:, 2], self)
-
-        return integrate_both_ways(x0)
+        out = [fline for flines in out for fline in flines]
+        out = [pfsspy.FieldLine(xout[:, 0], xout[:, 1], xout[:, 2], self) for xout in out]
+        return out
 
     @property
     def al(self):
