@@ -102,8 +102,6 @@ def test_field_lines(dipole_map, seeds):
     assert isinstance(field_lines.polarities, np.ndarray)
 
 
-
-
 def test_footpoints(dipole_map):
     input, out = dipole_map
 
