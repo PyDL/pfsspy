@@ -9,7 +9,6 @@ source field.
 ###############################################################################
 # First, import required modules
 import astropy.constants as const
-from astropy.time import Time
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatch
 import numpy as np
@@ -49,7 +48,7 @@ rss = 2.5
 ###############################################################################
 # From the boundary condition, number of radial grid points, and source
 # surface, we now construct an Input object that stores this information
-input = pfsspy.Input(br, nrho, rss, dtime=Time('2018-01-01'))
+input = pfsspy.Input(br, nrho, rss)
 
 ###############################################################################
 # Using the Input object, plot the input field

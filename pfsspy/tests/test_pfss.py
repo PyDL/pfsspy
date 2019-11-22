@@ -180,15 +180,3 @@ def test_plot_input(dipole_map):
     # Smoke test of input plotting
     inp, out = dipole_map
     inp.plot_input()
-
-
-def test_plot_source_surface(dipole_map):
-    # Smoke test of source surface plotting
-    inp, out = dipole_map
-    out.plot_source_surface()
-
-
-def test_plot_pil(dipole_map):
-    # Smoke test of PIL plotting
-    inp, out = dipole_map
-    out.plot_pil()
