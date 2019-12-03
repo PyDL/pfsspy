@@ -52,9 +52,11 @@ input = pfsspy.Input(br, nrho, rss)
 
 ###############################################################################
 # Using the Input object, plot the input field
-fig, ax = plt.subplots()
-mesh = input.plot_input(ax)
-fig.colorbar(mesh)
+m = input.map
+fig = plt.figure()
+ax = plt.subplot(projection=m)
+m.plot()
+plt.colorbar()
 ax.set_title('Input dipole field')
 
 ###############################################################################
@@ -64,10 +66,18 @@ output = pfsspy.pfss(input)
 ###############################################################################
 # Using the Output object we can plot the source surface field, and the
 # polarity inversion line.
-fig, ax = plt.subplots()
-mesh = output.plot_source_surface(ax)
-fig.colorbar(mesh)
-output.plot_pil(ax)
+ss_br = output.source_surface_br
+
+# Create the figure and axes
+fig = plt.figure()
+ax = plt.subplot(projection=ss_br)
+
+# Plot the source surface map
+ss_br.plot()
+# Plot the polarity inversion line
+ax.plot_coord(output.source_surface_pils[0])
+# Plot formatting
+plt.colorbar()
 ax.set_title('Source surface magnetic field')
 
 ###############################################################################
@@ -80,12 +90,18 @@ ax.set_aspect('equal')
 # Take 32 start points spaced equally in theta
 r = 1.01
 phi = np.pi / 2
-for theta in np.linspace(0, np.pi, 33):
-    x0 = coords.sph2cart(r, theta, phi)
-    field_line = output.trace(np.array(x0))
+r = 1.01
+phi = np.pi / 2
+theta = np.linspace(0, np.pi, 33)
+x0 = np.array(coords.sph2cart(r, theta, phi)).T
+
+tracer = pfsspy.tracing.PythonTracer()
+field_lines = tracer.trace(x0, output)
+
+for field_line in field_lines:
     color = {0: 'black', -1: 'tab:blue', 1: 'tab:red'}.get(field_line.polarity)
-    ax.plot(field_line.y / const.R_sun,
-            field_line.z / const.R_sun, color=color)
+    ax.plot(field_line.coords.y / const.R_sun,
+            field_line.coords.z / const.R_sun, color=color)
 
 # Add inner and outer boundary circles
 ax.add_patch(mpatch.Circle((0, 0), 1, color='k', fill=False))

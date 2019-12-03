@@ -15,7 +15,8 @@ import numpy as np
 import sunpy.map
 
 import pfsspy
-import pfsspy.coords as coords
+from pfsspy import coords
+from pfsspy import tracing
 
 
 ###############################################################################
@@ -64,24 +65,33 @@ input = pfsspy.Input(br, nrho, rss)
 
 ###############################################################################
 # Using the Input object, plot the input field
-fig, ax = plt.subplots()
-mesh = input.plot_input(ax)
-fig.colorbar(mesh)
+m = input.map
+fig = plt.figure()
+ax = plt.subplot(projection=m)
+m.plot()
+plt.colorbar()
 ax.set_title('Input field')
 
 ###############################################################################
 # Now calculate the PFSS solution, and plot the polarity inversion line.
 output = pfsspy.pfss(input)
-output.plot_pil(ax)
+# output.plot_pil(ax)
 
 
 ###############################################################################
 # Using the Output object we can plot the source surface field, and the
 # polarity inversion line.
-fig, ax = plt.subplots()
-mesh = output.plot_source_surface(ax)
-fig.colorbar(mesh)
-output.plot_pil(ax)
+ss_br = output.source_surface_br
+# Create the figure and axes
+fig = plt.figure()
+ax = plt.subplot(projection=ss_br)
+
+# Plot the source surface map
+ss_br.plot()
+# Plot the polarity inversion line
+ax.plot_coord(output.source_surface_pils[0])
+# Plot formatting
+plt.colorbar()
 ax.set_title('Source surface magnetic field')
 
 
@@ -92,17 +102,24 @@ ax.set_title('Source surface magnetic field')
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 
+tracer = tracing.PythonTracer()
 # Loop through 16 values in theta and 16 values in phi
 r = 1.01
-for theta in np.linspace(0, np.pi, 17):
-    for phi in np.linspace(0, 2 * np.pi, 17):
-        x0 = np.array(coords.sph2cart(r, theta, phi))
-        field_line = output.trace(x0)
-        color = {0: 'black', -1: 'tab:blue', 1: 'tab:red'}.get(field_line.polarity)
-        ax.plot(field_line.x / const.R_sun,
-                field_line.y / const.R_sun,
-                field_line.z / const.R_sun,
-                color=color, linewidth=1)
+theta = np.linspace(0, np.pi, 17)
+phi = np.linspace(0, 2 * np.pi, 17)
+theta, phi = np.meshgrid(theta, phi)
+theta, phi = theta.ravel(), phi.ravel()
+
+seeds = np.array(coords.sph2cart(r, theta, phi)).T
+
+field_lines = tracer.trace(seeds, output)
+
+for field_line in field_lines:
+    color = {0: 'black', -1: 'tab:blue', 1: 'tab:red'}.get(field_line.polarity)
+    ax.plot(field_line.coords.x / const.R_sun,
+            field_line.coords.y / const.R_sun,
+            field_line.coords.z / const.R_sun,
+            color=color, linewidth=1)
 
 ax.set_title('PFSS solution')
 plt.show()

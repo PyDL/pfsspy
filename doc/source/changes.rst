@@ -1,10 +1,76 @@
 Changelog
 =========
 
+0.4.0
+-----
+This release largely sees the transition to leveraging Sunpy Map objects.
+
+The following functionality has been added:
+
+TODO: ADD STUFF HERE
+
+And the following functionality has been removed:
+- ``pfsspy.Input.plot_input``. Instead :class:`Input` has a new
+  :property:`Input.map`  property, which returns a SunPy map, which can easily
+  be plotted using ``map.plot()``.
+- ``pfsspy.Output.plot_source_surface``. A map of :math:`B_{r}` on the source
+  surface can now be obtained using `pfsspy.Output.source_surface_br`, which
+  again returns a SunPy map.
+- ``pfsspy.Output.plot_pil``. The coordinates of the polarity inversion lines
+  on the source surface can now be obtained using
+  `pfsspy.Output.source_surface_pils`, which can then be plotted using
+  ``ax.plot_coord(pil[0])`` etc. See the examples section for an example.
+
+
+0.3.2
+-----
+- Fixed a bug in :attr:`pfsspy.FieldLine.is_open`, where some open field lines
+  were incorrectly calculated to be closed.
+
+0.3.1
+-----
+- Fixed a bug that incorrectly set closed line field polarities to -1 or 1
+  (instead of the correct value of zero).
+- :attr:`FieldLine.footpoints` has been removed in favour of the new
+  :attr:`pfsspy.FieldLine.solar_footpoint` and
+  :attr:`pfsspy.FieldLine.source_surface_footpoint`. These each return a single
+  footpoint. For a closed field line, see the API docs for further details
+  on this.
+- :class:`pfsspy.FieldLines` has been added, as a convenience class to store a
+  collection of field lines. This means convenience attributes such as
+  :attr:`pfsspy.FieldLines.source_surface_feet` can be used, and their values are
+  cached greatly speeding up repeated use.
+
+0.3.0
+-----
+
+- The API for doing magnetic field tracing has changed.
+  The new :mod:`pfsspy.tracing` module contains :class:`~pfsspy.tracing.Tracer`
+  classes that are used to perform the tracing. Code needs to be changed from::
+
+    fline = output.trace(x0)
+
+  to::
+
+    tracer = pfsspy.tracing.PythonTracer()
+    tracer.trace(x0, output)
+    flines = tracer.xs
+
+  Additionally ``x0`` can be a 2D array that contains multiple seed
+  points to trace, taking advantage of the parallelism of some solvers.
+- The :class:`pfsspy.FieldLine` class no longer inherits from
+  :class:`~astropy.coordinates.SkyCoord`, but the
+  :class:`~astropy.coordinates.SkyCoord` coordinates are now stored in
+  :attr:`pfsspy.FieldLine.coords` attribute.
+- :attr:`pfsspy.FieldLine.expansion_factor` now returns ``np.nan`` instead of
+  ``None`` if the field line is closed.
+- :class:`pfsspy.FieldLine` now has a :attr:`~pfsspy.FieldLine.footpoints`
+  attribute that returns the footpoint(s) of the field line.
+
 0.2.0
 -----
 
-- :class:`pfsspy.Input` and :class:`pfsspy.Output` now take the optiona keyword
+- :class:`pfsspy.Input` and :class:`pfsspy.Output` now take the optional keyword
   argument *dtime*, which stores the datetime on which the magnetic field
   measurements were made. This is then propagated to the *obstime* attribute
   of computed field lines, allowing them to be transformed in to coordinate

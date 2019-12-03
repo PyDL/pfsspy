@@ -3,15 +3,20 @@ import distutils.version
 import astropy
 import astropy.coordinates as coord
 import astropy.constants as const
+from astropy.time import Time
 import astropy.units as u
+import astropy.wcs
 
 from sunpy.coordinates import frames
-import sunpy.map.mapbase
+import sunpy.map
 
 import numpy as np
 import scipy.linalg as la
-import pfsspy.plot
 import pfsspy.coords
+import pfsspy.tracing
+
+from .fieldline import FieldLine, FieldLines
+from .grid import Grid
 
 HAS_NUMBA = False
 try:
@@ -30,82 +35,8 @@ if (distutils.version.LooseVersion(astropy.__version__) <
     raise RuntimeError('pfsspy requires astropy v3 to run ' +
                        f'(found version {astropy.__version__} installed)')
 
-
-class Grid:
-    """
-    Grid on which the solution is calculated.
-
-    The grid is evenly spaced in (cos(theta), phi, log(r)).
-    See :mod:`pfsspy.coords` for more information.
-    """
-    def __init__(self, ns, nphi, nr, rss):
-        self.ns = ns
-        self.nphi = nphi
-        self.nr = nr
-        self.rss = rss
-
-    @property
-    def ds(self):
-        """
-        Cell size in cos(theta).
-        """
-        return 2.0 / self.ns
-
-    @property
-    def dr(self):
-        """
-        Cell size in log(r).
-        """
-        return np.log(self.rss) / self.nr
-
-    @property
-    def dp(self):
-        """
-        Cell size in phi.
-        """
-        return 2 * np.pi / self.nphi
-
-    @property
-    def rc(self):
-        """
-        Location of the centre of cells in log(r).
-        """
-        return np.linspace(0.5 * self.dr, np.log(self.rss) - 0.5 * self.dr, self.nr)
-
-    @property
-    def sc(self):
-        """
-        Location of the centre of cells in cos(theta).
-        """
-        return np.linspace(-1 + 0.5 * self.ds, 1 - 0.5 * self.ds, self.ns)
-
-    @property
-    def pc(self):
-        """
-        Location of the centre of cells in phi.
-        """
-        return np.linspace(0.5 * self.dp, 2 * np.pi - 0.5 * self.dp, self.nphi)
-
-    @property
-    def rg(self):
-        """
-        Location of the edges of grid cells in log(r).
-        """
-        return np.linspace(0, np.log(self.rss), self.nr + 1)
-
-    @property
-    def sg(self):
-        """
-        Location of the edges of grid cells in cos(theta).
-        """
-        return np.linspace(-1, 1, self.ns + 1)
-
-    @property
-    def pg(self):
-        """
-        Location of the edges of grid cells in phi.
-        """
-        return np.linspace(0, 2 * np.pi, self.nphi + 1)
+# Default colourmap for magnetic field maps
+_MAG_CMAP = 'RdBu'
 
 
 class Input:
@@ -132,29 +63,56 @@ class Input:
         Radius of the source surface, as a fraction of the solar radius.
 
     dtime : datetime, optional
-        Datetime at which the input map was measured. If given it is attached
-        to the output and any field lines traced from the output.
+        Datetime at which the input map was measured. If *br* is a `Map`, then
+        the datetime is automatically extracted from there and the *dtime*
+        argument is not required.
     """
     def __init__(self, br, nr, rss, dtime=None):
         self.dtime = dtime
-        if isinstance(br, sunpy.map.mapbase.GenericMap):
-            br = br.data
         self.br = br
+        self._map = None
+        # Handle SunPy maps
+        if isinstance(br, sunpy.map.GenericMap):
+            self._map = br
+            self.dtime = br.date
+            self.br = br.data
+
         ns = self.br.shape[0]
         nphi = self.br.shape[1]
         self.grid = Grid(ns, nphi, nr, rss)
 
-    def plot_input(self, ax=None, **kwargs):
+    @property
+    def map(self):
         """
-        Plot a 2D image of the magnetic field boundary condition.
+        `sunpy.map.GenericMap` representation of the input.
+        """
+        r = const.R_sun
+        shape = (self.grid.ns, self.grid.nphi)
+        header = _carr_wcs_header(r, self.dtime, shape)
+        m = sunpy.map.Map((self.br, header))
+        m.plot_settings['cmap'] = _MAG_CMAP
+        return m
 
-        Parameters
-        ----------
-        ax : Axes
-            Axes to plot to. If ``None``, creates a new figure.
-        """
-        mesh = pfsspy.plot.radial_cut(self.grid.pc, self.grid.sc, self.br, ax, **kwargs)
-        return mesh
+
+def _carr_wcs_header(r, dtime, shape):
+    # If datetime is None, put in a dummy value here to make
+    # make_fitswcs_header happy, then strip it out at the end
+    obstime = dtime or Time('2000-1-1')
+
+    frame_out = coord.SkyCoord(
+        0 * u.deg, 0 * u.deg, radius=r, obstime=obstime,
+        frame="heliographic_carrington")
+    # Construct header
+    header = sunpy.map.make_fitswcs_header(
+        shape, frame_out,
+        scale=[180 / shape[0],
+               360 / shape[1]] * u.deg / u.pix,
+        projection_code="CAR")
+
+    # pop out the time if it isn't supplied
+    if dtime is None:
+        header.pop('date-obs')
+    return header
 
 
 class _OutOfBoundsError(RuntimeError):
@@ -241,47 +199,50 @@ class Output:
             file, alr=self._alr, als=self._als, alp=self._alp,
             rss=np.array([self.grid.rss]))
 
+    def _wcs_header(self, r):
+        """
+        Construct a world coordinate system describing the pfsspy solution at
+        a given radius *r*.
+        """
+        shape = (self.grid.ns, self.grid.nphi)
+        # Construct output coordinate frame
+        return _carr_wcs_header(r, self.dtime, shape)
+
     @property
     def source_surface_br(self):
         """
         Br on the source surface.
+
+        Returns
+        -------
+        :class:`sunpy.map.GenericMap`
         """
-        br, _, _ = self.bg
-        return br[:, :, -1].T
+        # Get radial component at the top
+        br = self.bc[0][:, :, -1]
+        # Remove extra ghost cells off the edge of the grid
+        br = br[1:-1, 1:-1].T
+        m = sunpy.map.Map((br, self._wcs_header(self.grid.rss)))
+        vlim = np.max(np.abs(br))
+        m.plot_settings['cmap'] = _MAG_CMAP
+        m.plot_settings['vmin'] = -vlim
+        m.plot_settings['vmax'] = vlim
+        return m
 
-    def plot_source_surface(self, ax=None, **kwargs):
+    @property
+    def source_surface_pils(self):
         """
-        Plot a 2D image of the magnetic field at the source surface.
+        Coordinates of the polarity inversion lines on the source surface.
 
-        Parameters
-        ----------
-        ax : Axes
-            Axes to plot to. If ``None``, creates a new figure.
-        kwargs :
-            Additional keyword arguments are handed to `pcolormesh` that
-            renders the source surface. A useful option here is handing
-            ``rasterized=True`` to rasterize the image.
+        Notes
+        -----
+        This is always returned as a list of coordinates, as in general there
+        may be more than one polarity inversion line.
         """
-        mesh = pfsspy.plot.radial_cut(
-            self.grid.pg, self.grid.sg, self.source_surface_br, ax, **kwargs)
-        return mesh
-
-    def plot_pil(self, ax=None, **kwargs):
-        """
-        Plot the polarity inversion line on the source surface.
-
-        The PIL is where Br = 0.
-
-        Parameters
-        ----------
-        ax : Axes
-            Axes to plot to. If ``None``, creates a new figure.
-
-        **kwargs :
-            Keyword arguments are handed to `ax.contour`.
-        """
-        pfsspy.plot.contour(
-            self.grid.pg, self.grid.sg, self.source_surface_br, [0], ax, **kwargs)
+        from skimage import measure
+        m = self.source_surface_br
+        contours = measure.find_contours(m.data, 0)
+        contours = [m.wcs.pixel_to_world(c[:, 1], c[:, 0]) for c in contours]
+        return contours
 
     @property
     def _brgi(self):
@@ -342,42 +303,17 @@ class Output:
         b1 = self._brgi(np.stack((phi, s, rho)))[0]
         return direction * b1 / np.linalg.norm(b1)
 
-    def trace(self, x0, atol=1e-4, rtol=1e-4):
+    def trace(self, tracer, seeds):
         """
-        Traces a field-line from *x0*. *x0* **must** be a cartesian coordinate.
-        See :mod:`pfsspy.coords` for more information on coordinate transforms,
-        and helper functions for transforming between coordinate systems.
-
-        Uses `scipy.integrate.solve_ivp`, with an LSODA method.
-
         Parameters
         ----------
-        x0 : array
-            Starting coordinate, in cartesian coordinates. :mod:`pfsspy.coords`
-            can be used to convert from spherical coordinates to cartesian
-            coordinates and vice versa.
-        dtf : float, optional
-            Absolute tolerance of the tracing.
-        rtol : float, optional
-            Relative tolerance of the tracing.
-
-        Returns
-        -------
-        fl : :class:`FieldLine`
+        tracer : tracing.Tracer
+        seeds : (n, 3) shaped array
+            Starting coordinates, in cartesian coordinates.
+            :mod:`pfsspy.coords` can be used to convert from spherical
+            coordinates to cartesian coordinates and vice versa.
         """
-        xforw = self._integrate_one_way(1, x0, rtol, atol)
-        xback = self._integrate_one_way(-1, x0, rtol, atol)
-        xback = np.flip(xback, axis=1)
-        xout = np.row_stack((xback.T, xforw.T))
-        fline = FieldLine(x=xout[:, 0] * const.R_sun,
-                          y=xout[:, 1] * const.R_sun,
-                          z=xout[:, 2] * const.R_sun,
-                          frame=frames.HeliographicCarrington,
-                          obstime=self.dtime,
-                          representation_type='cartesian')
-        fline._output = self
-        fline._expansion_factor = None
-        return fline
+        return tracer.trace(seeds, self)
 
     def _integrate_one_way(self, dt, start_point, rtol, atol):
         import scipy.integrate
@@ -712,104 +648,3 @@ def pfss(input):
     ph = np.linspace(0, 2 * np.pi, nphi + 1)
 
     return Output(alr, als, alp, input.grid, input.dtime)
-
-
-class FieldLine(coord.SkyCoord):
-    """
-    A single magnetic field line.
-
-    This is a sub-class of `astropy.coordinates.SkyCoord`. For more details
-    on
-
-    Attributes
-    ----------
-    representation_type : str
-        Coordinate system representation. By default is ``'cartesian'``, but
-        can also be manually set to ``'spherical'``.
-    x, y, z :
-        Field line cartesian coordinates.
-        Can only be accessed if *representation_type* is ``'cartesian'``.
-    r, theta, phi :
-        field line spherical coordinates.
-        Can only be accessed if *representation_type* is ``'spherical'``.
-    """
-    @property
-    def is_open(self):
-        """
-        Returns ``True`` if one of the field line is connected to the solar
-        surface and one to the outer boundary, ``False`` otherwise.
-        """
-        r = coord.SkyCoord(self, representation_type='spherical').radius
-        rtol = 0.1
-        if np.abs(r[0] - r[-1]) < r[0] * rtol:
-            return False
-        return True
-
-    @property
-    def polarity(self):
-        """
-        Magnetic field line polarity.
-
-        Returns
-        -------
-        pol : int
-            0 if the field line is closed, otherwise sign(Br) of the magnetic
-            field on the solar surface.
-        """
-        if not self.is_open:
-            return 0
-        # Because the field lines are integrated forwards, if the end point
-        # is on the outer boundary the field is outwards
-        foot1 = coord.SkyCoord(self[0], representation_type='spherical')
-        foot2 = coord.SkyCoord(self[-1], representation_type='spherical')
-        if foot2.radius - foot1.radius > 0:
-            return 1
-        else:
-            return -1
-
-    @property
-    def expansion_factor(self):
-        r"""
-        Magnetic field expansion factor.
-
-        The expansion factor is defnied as
-        :math:`(r_{\odot}^{2} B_{\odot}) / (r_{ss}^{2} B_{ss}))`
-
-        Returns
-        -------
-        exp_fact : float
-            Field line expansion factor.
-            If field line is closed, returns ``None``.
-        """
-        if self._expansion_factor is not None:
-            return self._expansion_factor
-        import scipy.interpolate
-
-        if not self.is_open:
-            return
-        # Extract ends of magnetic field line, and get them in spherical coords
-        foot1 = coord.SkyCoord(self[0], representation_type='spherical')
-        foot2 = coord.SkyCoord(self[-1], representation_type='spherical')
-        if foot1.radius > foot2.radius:
-            solar_foot = foot2
-            source_foot = foot1
-        else:
-            solar_foot = foot1
-            source_foot = foot2
-
-        def interp(map, coord):
-            phi = coord.lon
-            s = np.sin(coord.lat)
-            interpolator = scipy.interpolate.RectBivariateSpline(
-                self._output.grid.pg, self._output.grid.sg, map)
-            return interpolator(phi, s)
-
-        # Get output magnetic field, and calculate |B|
-        br, bs, bphi = self._output.bg
-        modb = np.sqrt(br**2 + bs**2 + bphi**2)
-        # Interpolate at each end of field line
-        b_solar = interp(modb[:, :, 0], solar_foot)[0, 0]
-        b_source = interp(modb[:, :, -1], source_foot)[0, 0]
-        self._expansion_factor = ((1**2 * b_solar) /
-                                  (self._output.grid.rss**2 * b_source))
-        return self._expansion_factor
